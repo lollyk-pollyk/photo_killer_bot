@@ -105,8 +105,6 @@ async def cmd_cancel(message: Message, state: FSMContext):
 
 @dp.message(Command("start"))
 async def cmd_start(message: Message, state: FSMContext):
-
-     print("[DEBUG] Команда start получена")
     user_id = message.from_user.id
     print(f"[DEBUG] user_id: {user_id}")
     
@@ -158,6 +156,7 @@ async def cmd_start(message: Message, state: FSMContext):
                          "• 2 предупреждения / попадание в вас фотопулей → выбывание\n\n"
                          "Введите ваше ИМЯ И ФАМИЛИЮ:")
     await state.set_state(RegisterState.waiting_name)
+     
 
 
 @dp.message(RegisterState.waiting_name)
