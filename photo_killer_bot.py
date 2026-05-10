@@ -52,24 +52,46 @@ class ExitState(StatesGroup):
 
 
 async def check_subscription(user_id: int) -> bool:
-    """Проверяет, подписан ли пользователь на все каналы.
-    Возвращает True только если подписан на ВСЕ каналы"""
+    """Проверяет, подписан ли пользователь на все каналы"""
+    try:
+        for channel in config.REQUIRED_CHANNELS:
+            member = await bot.get_chat_member(chat_id=f"@{channel}", user_id=user_id)
+            if member.status == "left":
+                return False
+        return True
+    except Exception as e:
+        print(f"Ошибка проверки подписки: {e}")
+        return False
 
+@dp.message(Command("test_sub"))
+async def test_subscription(message: Message):
+    """Тест проверки подписки (только для админа)"""
+    if message.from_user.id != config.ADMIN_ID:
+        await message.answer("Только для админа")
+        return
+    
+    user_id = message.from_user.id
+    result = "🔍 РЕЗУЛЬТАТ ПРОВЕРКИ 🔍\n\n"
+    
     for channel in config.REQUIRED_CHANNELS:
         try:
             member = await bot.get_chat_member(chat_id=f"@{channel}", user_id=user_id)
-            print(f"[DEBUG] Канал {channel}: статус {member.status}")
-
-            # Только эти статусы считаются "подписан"
-            if member.status not in ["member", "creator", "administrator"]:
-                return False
-
+            result += f"📢 @{channel}: {member.status}\n"
         except Exception as e:
-            return False
-
-    print(f"[DEBUG] Пользователь {user_id} подписан на все каналы")
-    return True
-
+            result += f"📢 @{channel}: ОШИБКА - {str(e)}\n"
+    
+    # Проверяем права бота
+    bot_id = (await bot.get_me()).id
+    result += f"\n🤖 Бот ID: {bot_id}\n"
+    
+    for channel in config.REQUIRED_CHANNELS:
+        try:
+            bot_member = await bot.get_chat_member(chat_id=f"@{channel}", user_id=bot_id)
+            result += f"🔧 Бот в @{channel}: {bot_member.status}\n"
+        except Exception as e:
+            result += f"🔧 Бот в @{channel}: ОШИБКА - {str(e)}\n"
+    
+    await message.answer(result)
 
 @dp.message(Command("cancel"))
 async def cmd_cancel(message: Message, state: FSMContext):
