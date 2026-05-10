@@ -54,25 +54,6 @@ class ExitState(StatesGroup):
     waiting_photo = State()
 
 
-async def check_subscription(user_id: int) -> bool:
-    """Проверяет, подписан ли пользователь на все каналы.
-    Возвращает True только если подписан на ВСЕ каналы"""
-
-    for channel in config.REQUIRED_CHANNELS:
-        try:
-            member = await bot.get_chat_member(chat_id=f"@{channel}", user_id=user_id)
-            print(f"[DEBUG] Канал {channel}: статус {member.status}")
-
-            # Только эти статусы считаются "подписан"
-            if member.status not in ["member", "creator", "administrator"]:
-                return False
-
-        except Exception as e:
-            return False
-
-    print(f"[DEBUG] Пользователь {user_id} подписан на все каналы")
-    return True
-
 
 @dp.message(Command("cancel"))
 async def cmd_cancel(message: Message, state: FSMContext):
@@ -87,18 +68,6 @@ async def cmd_cancel(message: Message, state: FSMContext):
 @dp.message(Command("start"))
 async def cmd_start(message: Message, state: FSMContext):
     user_id = message.from_user.id
-
-    is_subscribed, not_subscribed = await check_subscription(user_id)
-
-    if not is_subscribed:
-        channels_list = "\n".join([f"• https://t.me/{ch}" for ch in not_subscribed])
-        await message.answer(
-            f"❌ ДЛЯ УЧАСТИЯ В ИГРЕ НЕОБХОДИМО ПОДПИСАТЬСЯ НА КАНАЛЫ:\n\n"
-            f"{channels_list}\n\n"
-            f"✅ После подписки нажмите /start снова",
-            disable_web_page_preview=True
-        )
-        return
 
     with db.get_db() as conn:
         cur = conn.execute("SELECT user_id, name, is_alive FROM players WHERE user_id = ?", (user_id,))
@@ -457,12 +426,6 @@ async def cmd_kill(message: Message, state: FSMContext):
 
     # СНАЧАЛА проверяем, есть ли активная серия
     series = db.get_current_series()
-
-    is_subscribed, _ = await check_subscription(user_id)
-    if not is_subscribed:
-        await message.answer("❌ Вы не подписаны на наши каналы!\n"
-                             "Подпишитесь и нажмите /start")
-        return
 
     if not series:
         await message.answer("❌ Сейчас нет активной серии.\n\n"
