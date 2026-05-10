@@ -14,9 +14,6 @@ import config
 import data as db
 from scheduler_setup import setup_scheduler, scheduler
 
-from PIL import Image
-import io
-import aiohttp
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
