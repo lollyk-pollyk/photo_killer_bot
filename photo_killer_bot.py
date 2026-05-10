@@ -110,6 +110,7 @@ async def cmd_cancel(message: Message, state: FSMContext):
 @dp.message(Command("start"))
 async def cmd_start(message: Message, state: FSMContext):
     
+    user_id = message.from_user.id 
     is_subscribed, not_subscribed = await check_subscription(user_id)
     
     if not is_subscribed:
