@@ -4,4 +4,4 @@ ADMIN_ID = 1270658579
 
 DEFAULT_TARGETS_PER_PLAYER = 3
 DEFAULT_SERIES_DURATION_DAYS = 3
-#REQUIRED_CHANNELS = ["nuclearmephi", "media_school_mephi"]
+REQUIRED_CHANNELS = ["nuclearmephi", "media_school_mephi"]
