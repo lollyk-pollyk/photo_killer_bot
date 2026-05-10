@@ -14,6 +14,10 @@ import config
 import data as db
 from scheduler_setup import setup_scheduler, scheduler
 
+from PIL import Image
+import io
+import aiohttp
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -32,9 +36,11 @@ class KillState(StatesGroup):
     waiting_proof = State()
     waiting_target_choice = State()
 
+
 class AdminApproveState(StatesGroup):
     waiting_approve_registration = State()
     waiting_approve_kill = State()
+
 
 class AdminSupportState(StatesGroup):
     waiting_message = State()
@@ -43,24 +49,30 @@ class AdminSupportState(StatesGroup):
 class AdminReplyState(StatesGroup):
     waiting_reply = State()
 
+
 class ExitState(StatesGroup):
     waiting_photo = State()
 
-# async def check_subscription(user_id: int) -> tuple:
-#     """Проверяет, подписан ли пользователь на все каналы.
-#     Возвращает (True/False, список каналов_на_которые_не_подписан)"""
-#     not_subscribed = []
-#
-#     for channel in config.REQUIRED_CHANNELS:
-#         try:
-#             member = await bot.get_chat_member(chat_id=f"@{channel}", user_id=user_id)
-#             if member.status in ["left", "kicked"]:
-#                 not_subscribed.append(channel)
-#         except Exception as e:
-#             print(f"Ошибка проверки канала {channel}: {e}")
-#             not_subscribed.append(channel)
-#
-#     return len(not_subscribed) == 0, not_subscribed
+
+async def check_subscription(user_id: int) -> bool:
+    """Проверяет, подписан ли пользователь на все каналы.
+    Возвращает True только если подписан на ВСЕ каналы"""
+
+    for channel in config.REQUIRED_CHANNELS:
+        try:
+            member = await bot.get_chat_member(chat_id=f"@{channel}", user_id=user_id)
+            print(f"[DEBUG] Канал {channel}: статус {member.status}")
+
+            # Только эти статусы считаются "подписан"
+            if member.status not in ["member", "creator", "administrator"]:
+                return False
+
+        except Exception as e:
+            return False
+
+    print(f"[DEBUG] Пользователь {user_id} подписан на все каналы")
+    return True
+
 
 @dp.message(Command("cancel"))
 async def cmd_cancel(message: Message, state: FSMContext):
@@ -71,9 +83,22 @@ async def cmd_cancel(message: Message, state: FSMContext):
     else:
         await message.answer(" Нет активного действия для отмены.")
 
+
 @dp.message(Command("start"))
 async def cmd_start(message: Message, state: FSMContext):
     user_id = message.from_user.id
+
+    is_subscribed, not_subscribed = await check_subscription(user_id)
+
+    if not is_subscribed:
+        channels_list = "\n".join([f"• https://t.me/{ch}" for ch in not_subscribed])
+        await message.answer(
+            f"❌ ДЛЯ УЧАСТИЯ В ИГРЕ НЕОБХОДИМО ПОДПИСАТЬСЯ НА КАНАЛЫ:\n\n"
+            f"{channels_list}\n\n"
+            f"✅ После подписки нажмите /start снова",
+            disable_web_page_preview=True
+        )
+        return
 
     with db.get_db() as conn:
         cur = conn.execute("SELECT user_id, name, is_alive FROM players WHERE user_id = ?", (user_id,))
@@ -84,7 +109,7 @@ async def cmd_start(message: Message, state: FSMContext):
                 await message.answer(f" Вы уже зарегистрированы как {player[1]}!\n\n"
                                      f"Доступные команды:\n"
                                      f"/targets — мои цели\n"
-                                     f"/kill — загрузить фото убийства\n"
+                                     f"/kill — выстрелить фотопулей\n"
                                      f"/stats — моя статистика\n"
                                      f"/series — информация о серии\n"
                                      f"/exit — покинуть игровой мир\n")
@@ -98,7 +123,7 @@ async def cmd_start(message: Message, state: FSMContext):
                          "• В каждой серии вы получаете несколько целей\n"
                          "• У вас только одна фотопуля на серию\n"
                          "• Если не убили никого за серию → получаете предупреждение\n"
-                         "• 2 предупреждения / в вас попала фотопуля → выбывание\n\n"
+                         "• 2 предупреждения / попадение в вас фотопулей → выбывание\n\n"
                          "Введите ваше ИМЯ И ФАМИЛИЮ:")
     await state.set_state(RegisterState.waiting_name)
 
@@ -160,6 +185,7 @@ async def process_photo(message: Message, state: FSMContext):
     )
     await bot.send_photo(admin_id, file_id)
 
+
 @dp.callback_query(lambda c: c.data.startswith("show_photo_"))
 async def show_target_photo(callback: types.CallbackQuery):
     target_id = int(callback.data.split("_")[-1])
@@ -179,6 +205,8 @@ async def show_target_photo(callback: types.CallbackQuery):
             photo_file_id,
             caption=f" {name}"
         )
+
+
 # ========== ИГРОВЫЕ КОМАНДЫ ==========
 
 @dp.message(Command("support"))
@@ -297,12 +325,18 @@ async def close_support(callback: types.CallbackQuery):
     await callback.answer()
 
 
-
 @dp.message(Command("targets"))
 async def cmd_targets(message: Message):
     user_id = message.from_user.id
+
+    # СНАЧАЛА проверяем, есть ли активная серия
     series = db.get_current_series()
 
+    if not series:
+        await message.answer("❌ Сейчас нет активной серии.\n\n"
+                             "Дождитесь, когда администратор начнёт новую серию.\n"
+                             "Используйте /series для проверки статуса.")
+        return
 
     series_id, series_num, targets_per = series
 
@@ -313,9 +347,7 @@ async def cmd_targets(message: Message):
         if not player or not player[0]:
             await message.answer("💀 Вы выбыли из игры.")
             return
-        if not series:
-            await message.answer("Сейчас активной серии нет. Дождитесь объявления.")
-            return
+
         # Получаем живые цели
         cur = conn.execute("""
             SELECT t.target_id, p.name, p.photo_file_id
@@ -333,28 +365,30 @@ async def cmd_targets(message: Message):
         already_killed = cur.fetchone() is not None
 
         if not targets:
-            await message.answer("У вас нет живых целей в текущей серии.")
+            await message.answer("У вас нет живых целей в текущей серии.\n\n"
+                                 f"{'Вы уже использовали свою фотопулю.' if already_killed else '⚠️ Напоминание: если вы никого не убьёте до конца серии, получите предупреждение!'}")
             return
 
         # Отправляем список целей
         if already_killed:
-            await message.answer(f" ВАШИ ЦЕЛИ (серия {series_num}):\n\n"
-                               f" Вы уже использовали свою фотопулю в этой серии.\n"
-                               f"\n\n"
-                               f"Ваши цели (нажмите на кнопку, чтобы увидеть фото):")
+            await message.answer(f"ВАШИ ЦЕЛИ (серия {series_num}):\n\n"
+                                 f" Вы уже использовали свою фотопулю в этой серии.\n"
+                                 f"Убить больше никого нельзя.\n\n"
+                                 f"Нажмите на кнопку, чтобы увидеть фото цели:")
         else:
-            await message.answer(f" ВАШИ ЦЕЛИ (серия {series_num}):\n\n"
-                               f" Вы можете направить фотопулю только в ОДНУ цель из списка.\n\n"
-                               f" Нажмите на кнопку, чтобы увидеть фото цели:")
+            await message.answer(f"ВАШИ ЦЕЛИ (серия {series_num}):\n\n"
+                                 f" Вы можете убить только ОДНУ цель из списка.\n\n"
+                                 f" Нажмите на кнопку, чтобы увидеть фото цели:")
 
         for target_id, target_name, photo_file_id in targets:
             keyboard = InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text=f" Показать фото {target_name}", callback_data=f"show_photo_{target_id}")]
+                [InlineKeyboardButton(text=f"📸 Показать фото {target_name}", callback_data=f"show_photo_{target_id}")]
             ])
-            await message.answer(f" {target_name}", reply_markup=keyboard)
+            await message.answer(f"🎯 {target_name}", reply_markup=keyboard)
 
         if not already_killed and len(targets) == 1:
-            await message.answer("️У вас осталась всего одна цель! Не упустите шанс")
+            await message.answer(" У вас осталась всего одна цель! Не упустите шанс.")
+
 
 @dp.message(Command("stats"))
 async def cmd_stats(message: Message):
@@ -420,7 +454,21 @@ async def cmd_series(message: Message):
 @dp.message(Command("kill"))
 async def cmd_kill(message: Message, state: FSMContext):
     user_id = message.from_user.id
+
+    # СНАЧАЛА проверяем, есть ли активная серия
     series = db.get_current_series()
+
+    is_subscribed, _ = await check_subscription(user_id)
+    if not is_subscribed:
+        await message.answer("❌ Вы не подписаны на наши каналы!\n"
+                             "Подпишитесь и нажмите /start")
+        return
+
+    if not series:
+        await message.answer("❌ Сейчас нет активной серии.\n\n"
+                             "Дождитесь, когда администратор начнёт новую серию.\n"
+                             "Обычно это объявляется в чате.")
+        return
 
     series_id, series_num, _ = series
 
@@ -433,14 +481,10 @@ async def cmd_kill(message: Message, state: FSMContext):
             await message.answer("💀 Вы выбыли и не можете убивать.")
             return
 
-        if not series:
-            await message.answer("Нет активной серии.")
-            return
-
         # Проверяем, не убил ли уже в этой серии
         cur = conn.execute("SELECT 1 FROM kills WHERE killer_id = ? AND series_id = ?", (user_id, series_id))
         if cur.fetchone():
-            await message.answer("Вы уже использовали свою фотопулю в этой серии!")
+            await message.answer(" Вы уже использовали свою фотопулю в этой серии!")
             return
 
         # Получаем живые цели
@@ -455,13 +499,15 @@ async def cmd_kill(message: Message, state: FSMContext):
         targets = cur.fetchall()
 
         if not targets:
-            await message.answer("Кто-то вас опередил! У вас нет живых целей.")
+            await message.answer("У вас нет живых целей.\n\n"
+                                 "Возможно, кто-то убил их раньше вас.")
             return
 
         if len(targets) == 1:
             await state.update_data(target_id=targets[0][0], target_name=targets[0][1])
             await message.answer(
-                f" Ваша единственная цель: {targets[0][1]}\n\n Отправьте ФОТО доказательство :")
+                f" Ваша единственная цель: {targets[0][1]}\n\n"
+                f"📸 Отправьте ФОТО доказательство убийства:")
             await state.set_state(KillState.waiting_proof)
         else:
             # Сохраняем список целей в состояние
@@ -471,7 +517,7 @@ async def cmd_kill(message: Message, state: FSMContext):
                 resize_keyboard=True,
                 one_time_keyboard=True
             )
-            await message.answer("Укажите, кого поразим фотопулей:", reply_markup=kb)
+            await message.answer(" Укажите, кого поразим фотопулей:", reply_markup=kb)
             await state.set_state(KillState.waiting_target_choice)
 
 
@@ -550,7 +596,6 @@ async def process_kill_proof(message: Message, state: FSMContext):
                          f"Дождитесь подтверждения.\n"
                          f"После одобрения убийство будет засчитано.")
 
-
     # Отправляем админу на проверку
     admin_id = config.ADMIN_ID
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
@@ -569,7 +614,6 @@ async def process_kill_proof(message: Message, state: FSMContext):
         reply_markup=keyboard
     )
     await bot.send_photo(admin_id, file_id)
-
 
 
 @dp.message(Command("exit"))
@@ -652,6 +696,7 @@ async def process_exit_photo(message: Message, state: FSMContext):
         f"Спасибо за участие и прощальное фото!\n"
         f"Будем рады видеть вас снова в следующих играх."
     )
+
 
 @dp.callback_query(lambda c: c.data.startswith("exit_without_photo_"))
 async def exit_without_photo(callback: types.CallbackQuery, state: FSMContext):
@@ -901,6 +946,8 @@ async def cmd_remove_player(message: Message):
         )
     except:
         pass
+
+
 @dp.message(Command("end_series"))
 async def cmd_end_series(message: Message):
     if not is_admin(message):
@@ -1012,7 +1059,9 @@ async def cmd_players(message: Message):
 
         await message.answer(msg)
 
+
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+
 
 @dp.callback_query(lambda c: c.data.startswith("approve_reg_"))
 async def approve_registration(callback: types.CallbackQuery):
@@ -1078,6 +1127,7 @@ async def reject_registration(callback: types.CallbackQuery):
         f"Вы можете попробовать снова через /start"
     )
     await callback.answer()
+
 
 @dp.callback_query(lambda c: c.data.startswith("approve_kill_"))
 async def approve_kill(callback: types.CallbackQuery):
@@ -1148,9 +1198,9 @@ async def approve_kill(callback: types.CallbackQuery):
             target_id,
             photo_proof,
             caption=f" ВАС УБИЛИ!\n\n"
-                   f" Киллер: {killer_name}\n"
-                   f" Это фото стало доказательством вашего убийства.\n\n"
-                   f"Вы выбываете из игры. Спасибо за участие!"
+                    f" Киллер: {killer_name}\n"
+                    f" Это фото стало доказательством вашего убийства.\n\n"
+                    f"Вы выбываете из игры. Спасибо за участие!"
         )
     except:
         # Если не отправилось фото, отправляем текст
@@ -1220,6 +1270,7 @@ async def reject_kill(callback: types.CallbackQuery):
 
     await callback.answer()
 
+
 @dp.message(Command("broadcast"))
 async def cmd_broadcast(message: Message):
     if not is_admin(message):
@@ -1229,7 +1280,7 @@ async def cmd_broadcast(message: Message):
     text = message.text.replace("/broadcast", "").strip()
     if not text:
         await message.answer("❌ Используйте: /broadcast <текст сообщения>\n\n"
-                           "Пример: /broadcast Внимание! Завтра финал игры!")
+                             "Пример: /broadcast Внимание! Завтра финал игры!")
         return
 
     with db.get_db() as conn:
@@ -1254,8 +1305,9 @@ async def cmd_broadcast(message: Message):
                 failed += 1
 
         await message.answer(f"✅ Рассылка завершена!\n\n"
-                           f"Отправлено: {sent}\n"
-                           f"Не доставлено: {failed}")
+                             f"Отправлено: {sent}\n"
+                             f"Не доставлено: {failed}")
+
 
 @dp.message(Command("broadcast_all"))
 async def cmd_broadcast_all(message: Message):
@@ -1291,9 +1343,9 @@ async def cmd_broadcast_all(message: Message):
                 failed += 1
 
         await message.answer(f"✅ Рассылка завершена!\n\n"
-                           f"Всего: {len(players)}\n"
-                           f"Отправлено: {sent}\n"
-                           f"Не доставлено: {failed}")
+                             f"Всего: {len(players)}\n"
+                             f"Отправлено: {sent}\n"
+                             f"Не доставлено: {failed}")
 
 
 @dp.message(Command("msg"))
@@ -1346,6 +1398,7 @@ async def cmd_send_message(message: Message):
             await message.answer(f"✅ Сообщение отправлено игроку {name} (ID: {user_id})")
         except Exception as e:
             await message.answer(f"❌ Ошибка при отправке: {e}")
+
 
 @dp.message(Command("restore_player"))
 async def cmd_restore_player(message: Message):
@@ -1513,6 +1566,8 @@ async def handle_any_message(message: Message):
             "2. Используйте /start для регистрации\n\n"
             "По вопросам: /support"
         )
+
+
 # ========== ЗАПУСК ==========
 async def main():
     db.init_db()
