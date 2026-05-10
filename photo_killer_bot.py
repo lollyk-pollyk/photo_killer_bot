@@ -116,9 +116,9 @@ async def cmd_start(message: Message, state: FSMContext):
     if not is_subscribed:
         channels_list = "\n".join([f"• https://t.me/{ch}" for ch in not_subscribed])
         await message.answer(
-            f"❌ ДЛЯ УЧАСТИЯ В ИГРЕ НЕОБХОДИМО ПОДПИСАТЬСЯ НА КАНАЛЫ:\n\n"
+            f" Для участия в игре необходимо подписаться на каналы:\n\n"
             f"{channels_list}\n\n"
-            f"✅ После подписки нажмите /start снова",
+            f" После подписки нажмите /start снова",
             disable_web_page_preview=True
         )
         return
