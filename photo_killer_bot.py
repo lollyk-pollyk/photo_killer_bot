@@ -50,18 +50,22 @@ class AdminReplyState(StatesGroup):
 class ExitState(StatesGroup):
     waiting_photo = State()
 
-
-async def check_subscription(user_id: int) -> bool:
-    """Проверяет, подписан ли пользователь на все каналы"""
-    try:
-        for channel in config.REQUIRED_CHANNELS:
+async def check_subscription(user_id: int) -> tuple:
+    """Проверяет, подписан ли пользователь на все каналы.
+    Возвращает (True/False, список каналов_на_которые_не_подписан)"""
+    not_subscribed = []
+    
+    for channel in config.REQUIRED_CHANNELS:
+        try:
             member = await bot.get_chat_member(chat_id=f"@{channel}", user_id=user_id)
-            if member.status == "left":
-                return False
-        return True
-    except Exception as e:
-        print(f"Ошибка проверки подписки: {e}")
-        return False
+            if member.status not in ["member", "creator", "administrator"]:
+                not_subscribed.append(channel)
+        except Exception as e:
+            print(f"Ошибка проверки канала {channel}: {e}")
+            not_subscribed.append(channel)
+    
+    return len(not_subscribed) == 0, not_subscribed
+
 
 @dp.message(Command("test_sub"))
 async def test_subscription(message: Message):
@@ -105,21 +109,9 @@ async def cmd_cancel(message: Message, state: FSMContext):
 
 @dp.message(Command("start"))
 async def cmd_start(message: Message, state: FSMContext):
-    user_id = message.from_user.id
-    print(f"[DEBUG] user_id: {user_id}")
     
-    is_subscribed = await check_subscription(user_id)
-    print(f"[DEBUG] is_subscribed: {is_subscribed}")
-    
-    if not is_subscribed:
-        print("[DEBUG] Отказ в регистрации")
-        await message.answer("❌ Подпишитесь на каналы")
-        return
-    
-    print("[DEBUG] Проверка пройдена, продолжаем...")
-
     is_subscribed, not_subscribed = await check_subscription(user_id)
-
+    
     if not is_subscribed:
         channels_list = "\n".join([f"• https://t.me/{ch}" for ch in not_subscribed])
         await message.answer(
@@ -129,7 +121,7 @@ async def cmd_start(message: Message, state: FSMContext):
             disable_web_page_preview=True
         )
         return
-
+        
     with db.get_db() as conn:
         cur = conn.execute("SELECT user_id, name, is_alive FROM players WHERE user_id = ?", (user_id,))
         player = cur.fetchone()
