@@ -105,7 +105,20 @@ async def cmd_cancel(message: Message, state: FSMContext):
 
 @dp.message(Command("start"))
 async def cmd_start(message: Message, state: FSMContext):
+
+     print("[DEBUG] Команда start получена")
     user_id = message.from_user.id
+    print(f"[DEBUG] user_id: {user_id}")
+    
+    is_subscribed = await check_subscription(user_id)
+    print(f"[DEBUG] is_subscribed: {is_subscribed}")
+    
+    if not is_subscribed:
+        print("[DEBUG] Отказ в регистрации")
+        await message.answer("❌ Подпишитесь на каналы")
+        return
+    
+    print("[DEBUG] Проверка пройдена, продолжаем...")
 
     is_subscribed, not_subscribed = await check_subscription(user_id)
 
